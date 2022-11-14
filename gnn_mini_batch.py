@@ -18,6 +18,7 @@ import torch_geometric.transforms as T
 from torch_sparse import SparseTensor
 from torch_geometric.utils import to_undirected
 import pandas as pd
+import numpy as np
 
 eval_metric = 'auc'
 
@@ -91,8 +92,15 @@ def test(layer_loader, model, data, split_idx, evaluator, device, no_conv=False)
         eval_results[key] = evaluator.eval(data.y[node_id], y_pred[node_id])[eval_metric]
             
     return eval_results, losses, y_pred
+
+def predict_ori(model,data,node_id):
+    with torch.no_grad():
+        model.eval()
+        out = model(data.x[node_id])
+        y_pred = out.exp() 
         
-            
+    return y_pred 
+
 def main():
     parser = argparse.ArgumentParser(description='minibatch_gnn_models')
     parser.add_argument('--device', type=int, default=0)
@@ -196,6 +204,7 @@ def main():
             if valid_loss < min_valid_loss:
                 min_valid_loss = valid_loss
                 best_out = out.cpu()
+                torch.save(model.state_dict(), './'+'str(args.model)'+'_model.pt')
 
             if epoch % args.log_steps == 0:
                 print(f'Run: {run + 1:02d}, '
@@ -215,6 +224,13 @@ def main():
         if type(v) is list: para_dict.update({k:str(v)})
     pd.DataFrame(para_dict, index=[args.model]).to_csv(result_dir+'/results.csv')
 
+    model.load_state_dict(torch.load('./'+str(args.model)+'_model.pt'))
+    res_list = []
+    for i in range(3700550):
+      pre = predict_ori(model,data, i).numpy()
+      res_list.append(pre)
+    np_arr = np.array(res_list)
+    np.savetxt("./"+str(args.model)+".csv", np_arr, delimiter=",")
 
 if __name__ == "__main__":
     main()
