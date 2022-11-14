@@ -3,8 +3,10 @@
 from utils import DGraphFin
 from utils.utils import prepare_folder
 from utils.evaluator import Evaluator
-from models import MLP, MLPLinear, GCN, SAGE, GAT, GATv2
+from torch_geometric.data import NeighborSampler
+from models import SAGE_NeighSampler, GAT_NeighSampler, GATv2_NeighSampler
 from logger import Logger
+from tqdm import tqdm
 
 import argparse
 
@@ -20,7 +22,7 @@ import numpy as np
 
 eval_metric = 'auc'
 
-mlp_parameters = {'lr':0.01
+sage_neighsampler_parameters = {'lr':0.003
               , 'num_layers':2
               , 'hidden_channels':128
               , 'dropout':0.0
@@ -28,59 +30,69 @@ mlp_parameters = {'lr':0.01
               , 'l2':5e-7
              }
 
-gcn_parameters = {'lr':0.01
+gat_neighsampler_parameters = {'lr':0.003
               , 'num_layers':2
               , 'hidden_channels':128
               , 'dropout':0.0
               , 'batchnorm': False
               , 'l2':5e-7
+             , 'layer_heads':[4,1]
              }
 
-sage_parameters = {'lr':0.01
+gatv2_neighsampler_parameters = {'lr':0.003
               , 'num_layers':2
               , 'hidden_channels':128
-              , 'dropout':0
+              , 'dropout':0.0
               , 'batchnorm': False
-              , 'l2':5e-7
+              , 'l2':5e-6
+             , 'layer_heads':[4,1]
              }
 
 
-def train(model, data, train_idx, optimizer, no_conv=False):
-    # data.y is labels of shape (N, ) 
+def train(epoch, train_loader, model, data, train_idx, optimizer, device, no_conv=False):
     model.train()
 
-    optimizer.zero_grad()
-    if no_conv:
-        out = model(data.x[train_idx])
-    else:
-        out = model(data.x, data.adj_t)[train_idx]
-    loss = F.nll_loss(out, data.y[train_idx])
-    loss.backward()
-    optimizer.step()
+    pbar = tqdm(total=train_idx.size(0), ncols=80)
+    pbar.set_description(f'Epoch {epoch:02d}')
 
-    return loss.item()
+    total_loss = total_correct = 0
+    for batch_size, n_id, adjs in train_loader:
+        # `adjs` holds a list of `(edge_index, e_id, size)` tuples.
+        adjs = [adj.to(device) for adj in adjs]
+
+        optimizer.zero_grad()
+        out = model(data.x[n_id], adjs)
+        loss = F.nll_loss(out, data.y[n_id[:batch_size]])
+        loss.backward()
+        optimizer.step()
+
+        total_loss += float(loss)
+        pbar.update(batch_size)
+
+    pbar.close()
+    loss = total_loss / len(train_loader)
+
+    return loss
 
 
 @torch.no_grad()
-def test(model, data, split_idx, evaluator, no_conv=False):
-    # data.y is labels of shape (N, )
+def test(layer_loader, model, data, split_idx, evaluator, device, no_conv=False):
+    # data.y is labels of shape (N, ) 
     model.eval()
     
-    if no_conv:
-        out = model(data.x)
-    else:
-        out = model(data.x, data.adj_t)
-        
-    y_pred = out.exp()  # (N,num_classes)
+    out = model.inference(data.x, layer_loader, device)
+#     out = model.inference_all(data)
+    y_pred = out.exp()  # (N,num_classes)   
     
     losses, eval_results = dict(), dict()
     for key in ['train', 'valid', 'test']:
         node_id = split_idx[key]
+        node_id = node_id.to(device)
         losses[key] = F.nll_loss(out[node_id], data.y[node_id]).item()
         eval_results[key] = evaluator.eval(data.y[node_id], y_pred[node_id])[eval_metric]
             
     return eval_results, losses, y_pred
-        
+
 def predict_ori(model,data,node_id):
     with torch.no_grad():
         model.eval()
@@ -90,13 +102,13 @@ def predict_ori(model,data,node_id):
     return y_pred 
 
 def main():
-    parser = argparse.ArgumentParser(description='gnn_models')
+    parser = argparse.ArgumentParser(description='minibatch_gnn_models')
     parser.add_argument('--device', type=int, default=0)
     parser.add_argument('--dataset', type=str, default='DGraphFin')
     parser.add_argument('--log_steps', type=int, default=10)
     parser.add_argument('--model', type=str, default='mlp')
     parser.add_argument('--use_embeddings', action='store_true')
-    parser.add_argument('--epochs', type=int, default=200)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--runs', type=int, default=10)
     parser.add_argument('--fold', type=int, default=0)
     
@@ -112,7 +124,7 @@ def main():
     dataset = DGraphFin(root='./dataset/', name=args.dataset, transform=T.ToSparseTensor())
     
     nlabels = dataset.num_classes
-    if args.dataset in ['DGraphFin']: nlabels = 2
+    if args.dataset =='DGraphFin': nlabels = 2
         
     data = dataset[0]
     data.adj_t = data.adj_t.to_symmetric()
@@ -141,25 +153,28 @@ def main():
         
     result_dir = prepare_folder(args.dataset, args.model)
     print('result_dir:', result_dir)
-        
-    if args.model == 'mlp':
-        para_dict = mlp_parameters
-        model_para = mlp_parameters.copy()
+
+    train_loader = NeighborSampler(data.adj_t, node_idx=train_idx, sizes=[10, 5], batch_size=1024, shuffle=True, num_workers=12)
+    layer_loader = NeighborSampler(data.adj_t, node_idx=None, sizes=[-1], batch_size=4096, shuffle=False, num_workers=12)        
+    
+    if args.model == 'sage_neighsampler':
+        para_dict = sage_neighsampler_parameters
+        model_para = sage_neighsampler_parameters.copy()
         model_para.pop('lr')
         model_para.pop('l2')
-        model = MLP(in_channels = data.x.size(-1), out_channels = nlabels, **model_para).to(device)
-    if args.model == 'gcn':   
-        para_dict = gcn_parameters
-        model_para = gcn_parameters.copy()
+        model = SAGE_NeighSampler(in_channels = data.x.size(-1), out_channels = nlabels, **model_para).to(device)
+    if args.model == 'gat_neighsampler':   
+        para_dict = gat_neighsampler_parameters
+        model_para = gat_neighsampler_parameters.copy()
         model_para.pop('lr')
         model_para.pop('l2')        
-        model = GCN(in_channels = data.x.size(-1), out_channels = nlabels, **model_para).to(device)
-    if args.model == 'sage':        
-        para_dict = sage_parameters
-        model_para = sage_parameters.copy()
+        model = GAT_NeighSampler(in_channels = data.x.size(-1), out_channels = nlabels, **model_para).to(device)
+    if args.model == 'gatv2_neighsampler':        
+        para_dict = gatv2_neighsampler_parameters
+        model_para = gatv2_neighsampler_parameters.copy()
         model_para.pop('lr')
         model_para.pop('l2')        
-        model = SAGE(in_channels = data.x.size(-1), out_channels = nlabels, **model_para).to(device)
+        model = GATv2_NeighSampler(in_channels = data.x.size(-1), out_channels = nlabels, **model_para).to(device)
 
     print(f'Model {args.model} initialized')
 
@@ -178,8 +193,8 @@ def main():
         best_out = None
 
         for epoch in range(1, args.epochs+1):
-            loss = train(model, data, train_idx, optimizer, no_conv)
-            eval_results, losses, out = test(model, data, split_idx, evaluator, no_conv)
+            loss = train(epoch, train_loader, model, data, train_idx, optimizer, device, no_conv)
+            eval_results, losses, out = test(layer_loader, model, data, split_idx, evaluator, device, no_conv)
             train_eval, valid_eval, test_eval = eval_results['train'], eval_results['valid'], eval_results['test']
             train_loss, valid_loss, test_loss = losses['train'], losses['valid'], losses['test']
 
@@ -205,16 +220,18 @@ def main():
     final_results = logger.print_statistics()
     print('final_results:', final_results)
     para_dict.update(final_results)
+    for k, v in para_dict.items():
+        if type(v) is list: para_dict.update({k:str(v)})
     pd.DataFrame(para_dict, index=[args.model]).to_csv(result_dir+'/results.csv')
 
-    model.load_state_dict(torch.load('./'+str(args.model)+'_model.pt'))
-    res_list = []
-    for i in range(3700550):
-      pre = predict_ori(model,data, i).numpy()
-      res_list.append(pre)
-    np_arr = np.array(res_list)
-    np.savetxt("./"+str(args.model)+".csv", np_arr, delimiter=",")
-
+    np.savetxt("./"+str(args.model)+".csv", best_out.numpy(), delimiter=",")
+    # model.load_state_dict(torch.load('./'+str(args.model)+'_model.pt'))
+    # res_list = []
+    # for i in range(3700550):
+    #   pre = predict_ori(model,data, i).numpy()
+    #   res_list.append(pre)
+    # np_arr = np.array(res_list)
+    # np.savetxt("./"+str(args.model)+".csv", np_arr, delimiter=",")
 
 if __name__ == "__main__":
     main()
