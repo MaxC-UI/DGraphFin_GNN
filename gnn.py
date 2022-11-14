@@ -189,7 +189,7 @@ def main():
             if valid_loss < min_valid_loss:
                 min_valid_loss = valid_loss
                 best_out = out.cpu()
-                torch.save(model.state_dict(), './'+'str(args.model)'+'_model.pt')
+                torch.save(model.state_dict(), './'+str(args.model)+'_model.pt')
 
             if epoch % args.log_steps == 0:
                 print(f'Run: {run + 1:02d}, '
