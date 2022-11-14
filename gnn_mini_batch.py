@@ -224,13 +224,7 @@ def main():
         if type(v) is list: para_dict.update({k:str(v)})
     pd.DataFrame(para_dict, index=[args.model]).to_csv(result_dir+'/results.csv')
 
-    model.load_state_dict(torch.load('./'+str(args.model)+'_model.pt'))
-    res_list = []
-    for i in range(3700550):
-      pre = predict_ori(model,data, i).numpy()
-      res_list.append(pre)
-    np_arr = np.array(res_list)
-    np.savetxt("./"+str(args.model)+".csv", np_arr, delimiter=",")
+    np.savetxt("./"+str(args.model)+".csv", best_out.numpy(), delimiter=",")
 
 if __name__ == "__main__":
     main()
