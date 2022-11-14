@@ -200,7 +200,7 @@ def main():
     para_dict.update(final_results)
     pd.DataFrame(para_dict, index=[args.model]).to_csv(result_dir+'/results.csv')
 
-     np.savetxt("./"+str(args.model)+".csv", best_out.numpy(), delimiter=",")
+    np.savetxt("./"+str(args.model)+".csv", best_out.numpy(), delimiter=",")
 
 if __name__ == "__main__":
     main()
