@@ -73,7 +73,7 @@ def test(model, data, split_idx, evaluator, no_conv=False):
     y_pred = out.exp()  # (N,num_classes)
     
     losses, eval_results = dict(), dict()
-    for key in ['train', 'valid', 'test']:
+    for key in ['train', 'valid']:
         node_id = split_idx[key]
         losses[key] = F.nll_loss(out[node_id], data.y[node_id]).item()
         eval_results[key] = evaluator.eval(data.y[node_id], y_pred[node_id])[eval_metric]
@@ -172,8 +172,8 @@ def main():
         for epoch in range(1, args.epochs+1):
             loss = train(model, data, train_idx, optimizer, no_conv)
             eval_results, losses, out = test(model, data, split_idx, evaluator, no_conv)
-            train_eval, valid_eval, test_eval = eval_results['train'], eval_results['valid'], eval_results['test']
-            train_loss, valid_loss, test_loss = losses['train'], losses['valid'], losses['test']
+            train_eval, valid_eval = eval_results['train'], eval_results['valid']
+            train_loss, valid_loss = losses['train'], losses['valid']
 
 #                 if valid_eval > best_valid:
 #                     best_valid = valid_result
@@ -181,22 +181,22 @@ def main():
             if valid_loss < min_valid_loss:
                 min_valid_loss = valid_loss
                 best_out = out.cpu()
+                torch.save(model.state_dict(), './model.pt') 
 
             if epoch % args.log_steps == 0:
                 print(f'Run: {run + 1:02d}, '
                           f'Epoch: {epoch:02d}, '
                           f'Loss: {loss:.4f}, '
                           f'Train: {100 * train_eval:.3f}%, '
-                          f'Valid: {100 * valid_eval:.3f}% '
-                          f'Test: {100 * test_eval:.3f}%')
-            logger.add_result(run, [train_eval, valid_eval, test_eval])
+                          f'Valid: {100 * valid_eval:.3f}% ')
+            # logger.add_result(run, [train_eval, valid_eval])
 
-        logger.print_statistics(run)
+        # logger.print_statistics(run)
 
-    final_results = logger.print_statistics()
-    print('final_results:', final_results)
-    para_dict.update(final_results)
-    pd.DataFrame(para_dict, index=[args.model]).to_csv(result_dir+'/results.csv')
+    # final_results = logger.print_statistics()
+    # print('final_results:', final_results)
+    # para_dict.update(final_results)
+    # pd.DataFrame(para_dict, index=[args.model]).to_csv(result_dir+'/results.csv')
 
 
 if __name__ == "__main__":
