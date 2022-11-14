@@ -52,11 +52,17 @@ class Evaluator:
         '''
         
         if y_pred.shape[1] ==2:
-            auc = roc_auc_score(y_true, y_pred[:, 1])
+            try:
+              auc = roc_auc_score(y_true, y_pred[:, 1])
+            except ValueError:
+              auc = 0.5
         else:
             onehot_code = np.eye(y_pred.shape[1])
             y_true_onehot = onehot_code[y_true]
-            auc = roc_auc_score(y_true_onehot, y_pred)
+            try:
+              auc = roc_auc_score(y_true_onehot, y_pred)
+            except ValueError:
+              auc = 0.5
 
         return {'auc': auc}
 
